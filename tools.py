@@ -44,34 +44,43 @@ def search_listings(
     """
     Search the mock listings dataset for items matching the description,
     optional size, and optional price ceiling.
-
-    Args:
-        description: Keywords describing what the user is looking for
-                     (e.g., "vintage graphic tee").
-        size:        Size string to filter by, or None to skip size filtering.
-                     Matching is case-insensitive (e.g., "M" matches "S/M").
-        max_price:   Maximum price (inclusive), or None to skip price filtering.
-
-    Returns:
-        A list of matching listing dicts, sorted by relevance (best match first).
-        Returns an empty list if nothing matches — does NOT raise an exception.
-
-    Each listing dict has the following fields:
-        id, title, description, category, style_tags (list), size,
-        condition, price (float), colors (list), brand, platform
-
-    TODO:
-        1. Load all listings with load_listings().
-        2. Filter by max_price and size (if provided).
-        3. Score each remaining listing by keyword overlap with `description`.
-        4. Drop any listings with a score of 0 (no relevant matches).
-        5. Sort by score, highest first, and return the listing dicts.
-
-    Before writing code, fill in the Tool 1 section of planning.md.
     """
-    # Replace this with your implementation
-    return []
+    listings = load_listings()
 
+    query_words = set(description.lower().split())
+    matches = []
+
+    for item in listings:
+        if max_price is not None and item["price"] > max_price:
+            continue
+
+        if size is not None:
+            item_size = str(item["size"]).lower()
+            requested_size = size.lower()
+            if requested_size not in item_size:
+                continue
+
+        searchable_text = " ".join([
+            str(item.get("title", "")),
+            str(item.get("description", "")),
+            str(item.get("category", "")),
+            " ".join(item.get("style_tags", [])),
+            " ".join(item.get("colors", [])),
+            str(item.get("brand", "")),
+            str(item.get("platform", "")),
+        ]).lower()
+
+        score = 0
+        for word in query_words:
+            if word in searchable_text:
+                score += 1
+
+        if score > 0:
+            matches.append((score, item))
+
+    matches.sort(key=lambda pair: pair[0], reverse=True)
+
+    return [item for score, item in matches]
 
 # ── Tool 2: suggest_outfit ────────────────────────────────────────────────────
 
@@ -100,9 +109,73 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
 
     Before writing code, fill in the Tool 2 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    client = _get_groq_client()
 
+    item_title = new_item.get("title", "this item")
+    item_description = new_item.get("description", "")
+    item_style_tags = ", ".join(new_item.get("style_tags", []))
+    item_colors = ", ".join(new_item.get("colors", []))
+
+    wardrobe_items = wardrobe.get("items", [])
+
+    if not wardrobe_items:
+        prompt = f"""
+You are a friendly fashion assistant.
+
+The user is considering this thrifted item:
+- Title: {item_title}
+- Description: {item_description}
+- Style tags: {item_style_tags}
+- Colors: {item_colors}
+
+The user's wardrobe is empty, so give general styling advice.
+Suggest 1-2 outfit ideas using common clothing pieces.
+Keep it clear, practical, and easy to understand.
+"""
+    else:
+        wardrobe_text = "\n".join(
+            [
+                f"- {item.get('name', 'Unnamed item')}: "
+                f"{item.get('category', '')}, "
+                f"{item.get('color', '')}, "
+                f"{item.get('style', '')}"
+                for item in wardrobe_items
+            ]
+        )
+
+        prompt = f"""
+You are a friendly fashion assistant.
+
+The user is considering this thrifted item:
+- Title: {item_title}
+- Description: {item_description}
+- Style tags: {item_style_tags}
+- Colors: {item_colors}
+
+The user's wardrobe contains:
+{wardrobe_text}
+
+Suggest 1-2 complete outfits using the thrifted item and pieces from the user's wardrobe.
+Keep the advice specific, practical, and easy to understand.
+"""
+
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a helpful fashion assistant who gives clear outfit advice.",
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        temperature=0.7,
+        max_tokens=300,
+    )
+
+    return response.choices[0].message.content.strip()
 
 # ── Tool 3: create_fit_card ───────────────────────────────────────────────────
 
@@ -133,5 +206,49 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
 
     Before writing code, fill in the Tool 3 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    if not outfit or not outfit.strip():
+        return "A fit card could not be created because the outfit information is missing."
+
+    client = _get_groq_client()
+
+    item_title = new_item.get("title", "this item")
+    item_price = new_item.get("price", "unknown price")
+    item_platform = new_item.get("platform", "unknown platform")
+    item_description = new_item.get("description", "")
+
+    prompt = f"""
+You are creating a short outfit caption for a thrifted fashion find.
+
+Item details:
+- Title: {item_title}
+- Price: ${item_price}
+- Platform: {item_platform}
+- Description: {item_description}
+
+Outfit suggestion:
+{outfit}
+
+Write a 2-4 sentence fit card or caption.
+Make it sound casual and authentic, like a real outfit post.
+Mention the item name, price, and platform naturally once.
+Capture the outfit vibe in specific terms.
+Do not sound like a product description.
+"""
+
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {
+                "role": "system",
+                "content": "You create short, stylish, natural outfit captions.",
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        temperature=0.9,
+        max_tokens=220,
+    )
+
+    return response.choices[0].message.content.strip()
